@@ -1,0 +1,14 @@
+user.email=1186537233@qq.com
+user.name=chenyihan0115
+core.repositoryformatversion=0
+core.filemode=true
+core.bare=false
+core.logallrefupdates=true
+remote.origin.url=git://g.csail.mit.edu/xv6-labs-2020
+remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+branch.master.remote=origin
+branch.master.merge=refs/heads/master
+branch.util.remote=origin
+branch.util.merge=refs/heads/util
+branch.thread.remote=origin
+branch.thread.merge=refs/heads/thread
