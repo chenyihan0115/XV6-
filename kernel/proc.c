@@ -71,12 +71,13 @@ mycpu(void) {
 }
 
 // Return the current struct proc *, or zero if none.
+//获取当前CPU的当前进程的指针
 struct proc*
 myproc(void) {
-  push_off();
-  struct cpu *c = mycpu();
-  struct proc *p = c->proc;
-  pop_off();
+  push_off(); // 禁用中断
+  struct cpu *c = mycpu();// 获取当前CPU结构体指针
+  struct proc *p = c->proc; // 获取当前CPU的当前进程指针
+  pop_off(); // 恢复中断状态
   return p;
 }
 

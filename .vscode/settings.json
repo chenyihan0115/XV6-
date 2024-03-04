@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "*.cpp": "cpp",
+        "cmath": "c",
+        "type_traits": "c",
+        "limits": "c",
+        "typeinfo": "c",
+        "cstdlib": "c"
+    }
+}

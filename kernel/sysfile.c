@@ -116,6 +116,7 @@ sys_fstat(void)
 }
 
 // Create the path new as a link to the same inode as old.
+//
 uint64
 sys_link(void)
 {
@@ -238,6 +239,8 @@ bad:
   return -1;
 }
 
+//为一个新的inode创建一个新的名字
+
 static struct inode*
 create(char *path, short type, short major, short minor)
 {
@@ -286,7 +289,7 @@ create(char *path, short type, short major, short minor)
 uint64
 sys_open(void)
 {
-  char path[MAXPATH];
+   char path[MAXPATH];
   int fd, omode;
   struct file *f;
   struct inode *ip;
@@ -304,11 +307,30 @@ sys_open(void)
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
-      end_op();
-      return -1;
+    int symlink_depth = 0;
+    while(1) { // recursively follow symlinks
+      if((ip = namei(path)) == 0){
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+      if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0) {
+        if(++symlink_depth > 10) {
+          // too many layer of symlinks, might be a loop
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        if(readi(ip, 0, (uint64)path, 0, MAXPATH) < 0) {
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        iunlockput(ip);
+      } else {
+        break;
+      }
     }
-    ilock(ip);
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -454,6 +476,7 @@ sys_exec(void)
   return -1;
 }
 
+//通过提供创建管道对的方法将管道和文件系统连接起来
 uint64
 sys_pipe(void)
 {
@@ -482,5 +505,34 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+
+uint64
+sys_symlink(void)
+{
+  struct inode *ip;
+  char target[MAXPATH], path[MAXPATH];
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+
+  ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+
+  // use the first data block to store target path.
+  if(writei(ip, 0, (uint64)target, 0, strlen(target)) < 0) {
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+
+  end_op();
   return 0;
 }

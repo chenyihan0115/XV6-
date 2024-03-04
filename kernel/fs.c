@@ -61,6 +61,7 @@ bzero(int dev, int bno)
 // Blocks.
 
 // Allocate a zeroed disk block.
+//申请新的磁盘块：从空闲池中
 static uint
 balloc(uint dev)
 {
@@ -68,6 +69,7 @@ balloc(uint dev)
   struct buf *bp;
 
   bp = 0;
+
   for(b = 0; b < sb.size; b += BPB){
     bp = bread(dev, BBLOCK(b, sb));
     for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
@@ -86,6 +88,7 @@ balloc(uint dev)
 }
 
 // Free a disk block.
+//释放一个块
 static void
 bfree(int dev, uint b)
 {
@@ -192,6 +195,7 @@ static struct inode* iget(uint dev, uint inum);
 // Allocate an inode on device dev.
 // Mark it as allocated by  giving it type type.
 // Returns an unlocked but allocated and referenced inode.
+//创建一个新的inode
 struct inode*
 ialloc(uint dev, short type)
 {
@@ -380,22 +384,58 @@ bmap(struct inode *ip, uint bn)
   uint addr, *a;
   struct buf *bp;
 
+  // 如果逻辑块号小于直接块的数量
   if(bn < NDIRECT){
+    // 如果对应的磁盘块号为0，分配一个新的块，并更新Inode结构
     if((addr = ip->addrs[bn]) == 0)
       ip->addrs[bn] = addr = balloc(ip->dev);
     return addr;
   }
-  bn -= NDIRECT;
+  bn -= NDIRECT;// 减去直接块的数量
 
+  // 如果逻辑块号在一级间接块范围内
   if(bn < NINDIRECT){
-    // Load indirect block, allocating if necessary.
+    // 加载一级间接块，如果不存在则分配一个新的块
     if((addr = ip->addrs[NDIRECT]) == 0)
       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
-    bp = bread(ip->dev, addr);
-    a = (uint*)bp->data;
+    bp = bread(ip->dev, addr);// 读取一级间接块
+    a = (uint*)bp->data;//获取块的数据
+    // 如果对应的磁盘块号为0，分配一个新的块，并更新Inode结构，同时写回间接块
     if((addr = a[bn]) == 0){
       a[bn] = addr = balloc(ip->dev);
       log_write(bp);
+    }
+    brelse(bp);// 释放对间接块的引用
+    return addr; // 返回磁盘块号
+  }
+
+   bn -= NINDIRECT;
+
+  //如果逻辑块号在双间接块范围内
+  if(bn < NINDIRECT * NINDIRECT) { // doubly-indirect
+    // Load indirect block, allocating if necessary.
+    //加载二级间接块，没有则分配一个新的块
+    if((addr = ip->addrs[NDIRECT+1]) == 0)
+      ip->addrs[NDIRECT+1] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);//读取二级间接块
+    a = (uint*)bp->data;//获取二级块的数据
+
+    //如果对应的一级间接块号为0，分配一个新的块，并更新Inode结构，同时写回二级间接块
+    if((addr = a[bn/NINDIRECT]) == 0){
+      //bn/NINDIRECT 计算在一级间接块中的位置，将分配的新块号更新到一级间接块中。
+      a[bn/NINDIRECT] = addr = balloc(ip->dev);
+      log_write(bp);//将对二级间接块的修改写回磁盘
+    }
+    brelse(bp);// 释放对二级间接块的引用
+    bn %= NINDIRECT;// 减去一级间接块的数量，得到在一级间接块中的偏移，计算一级间接块中的新位置。
+    bp = bread(ip->dev, addr); // 重新读取一级间接块
+    a = (uint*)bp->data;// 获取块的数据
+
+    //// 如果对应的磁盘块号为0，分配一个新的块，并更新Inode结构，同时写回一级间接块
+    if((addr = a[bn]) == 0){
+      //将分配的新块号更新到直接块中
+      a[bn] = addr = balloc(ip->dev);
+      log_write(bp);//将对一级间接块的修改写回磁盘。
     }
     brelse(bp);
     return addr;
@@ -526,6 +566,7 @@ namecmp(const char *s, const char *t)
 
 // Look for a directory entry in a directory.
 // If found, set *poff to byte offset of entry.
+//在目录中搜索带有特定名称的条目
 struct inode*
 dirlookup(struct inode *dp, char *name, uint *poff)
 {
@@ -553,6 +594,7 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 }
 
 // Write a new directory entry (name, inum) into the directory dp.
+//在当前目录dp下创建一个新的目录项
 int
 dirlink(struct inode *dp, char *name, uint inum)
 {
@@ -625,27 +667,32 @@ skipelem(char *path, char *name)
 // If parent != 0, return the inode for the parent and copy the final
 // path element into name, which must have room for DIRSIZ bytes.
 // Must be called inside a transaction since it calls iput().
+//用于根据路径查找目录中的inode的函数 namex。它通过遍历路径中的每个元素，使用 dirlookup 函数查找并返回对应的inode
 static struct inode*
 namex(char *path, int nameiparent, char *name)
 {
-  struct inode *ip, *next;
+  struct inode *ip, *next;//用于保存当前和下一个inode。
 
+  // 如果路径以 '/' 开始，从根inode开始查找
   if(*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
   else
-    ip = idup(myproc()->cwd);
+    ip = idup(myproc()->cwd);//获取当前进程的当前工作目录(inode)，并通过 idup 函数增加其引用计数。
 
+  //使用skipelem遍历路径中的每个元素
   while((path = skipelem(path, name)) != 0){
-    ilock(ip);
-    if(ip->type != T_DIR){
+    ilock(ip);//锁定当前inode中查找
+    if(ip->type != T_DIR){//不是目录，失败
       iunlockput(ip);
       return 0;
     }
+    //调用的是nameiparent，且是最后一个元素
     if(nameiparent && *path == '\0'){
-      // Stop one level early.
+      // // 提前结束循环，返回当前inode
       iunlock(ip);
       return ip;
     }
+    //循环使用dirlookup查找路径元素，并通过 ip = next;为下一次迭代做准备
     if((next = dirlookup(ip, name, 0)) == 0){
       iunlockput(ip);
       return 0;
@@ -653,6 +700,7 @@ namex(char *path, int nameiparent, char *name)
     iunlockput(ip);
     ip = next;
   }
+  //如果是nameiparent，并且最后一个元素处理完毕，释放当前inode
   if(nameiparent){
     iput(ip);
     return 0;
