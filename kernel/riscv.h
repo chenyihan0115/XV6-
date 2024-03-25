@@ -214,6 +214,8 @@ w_mtvec(uint64 x)
 static inline void 
 w_satp(uint64 x)
 {
+  // 格式[汇编代码模板:输出变量:输入变量:修改列表]
+  // %0表示的是引用第一个变量，这里就是x，它被以寄存器的形式存放下来，写入satp
   asm volatile("csrw satp, %0" : : "r" (x));
 }
 
@@ -346,20 +348,22 @@ sfence_vma()
 #define PGSIZE 4096 // bytes per page
 #define PGSHIFT 12  // bits of offset within a page
 
-#define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
-#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
+#define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))//它的返回值是将大小 sz 向上舍入到页面边界后的结果(向上取整)
+#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))//(向下取整)
 
-#define PTE_V (1L << 0) // valid
-#define PTE_R (1L << 1)
-#define PTE_W (1L << 2)
-#define PTE_X (1L << 3)
-#define PTE_U (1L << 4) // 1 -> user can access
+#define PTE_V (1L << 0) // valid表示页表条目的有效性（Valid）
+#define PTE_R (1L << 1) //表示页表条目可读（Read）。
+#define PTE_W (1L << 2) //表示页表条目可写（Write）。
+#define PTE_X (1L << 3) //表示页表条目可执行（Execute）。
+#define PTE_U (1L << 4) // 1 -> user can access表示用户空间是否可以访问该页表条目。
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
 
 #define PTE2PA(pte) (((pte) >> 10) << 12)
 
+// 提取出PTE的所有标记位
+// 0x3ff相当于保留低10位
 #define PTE_FLAGS(pte) ((pte) & 0x3FF)
 
 // extract the three 9-bit page table indices from a virtual address.

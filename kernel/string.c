@@ -35,7 +35,9 @@ memmove(void *dst, const void *src, uint n)
 
   s = src;
   d = dst;
+  // case1：src与dst字符串部分重叠时，倒序对字节进行复制，这样可以避免覆盖问题
   if(s < d && s + n > d){
+    //调整指针到字符串尾部，准备开始倒序复制
     s += n;
     d += n;
     while(n-- > 0)

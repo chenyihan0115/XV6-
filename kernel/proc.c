@@ -83,32 +83,49 @@ allocpid() {
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
+// 查找进程表，找到UNUSED状态的进程
+// 如果找到了UNUSED状态的进程，那么初始化它的状态，使其能在内核态下运行
+// 并且返回时不占用锁
+// 如果没有空闲进程，或内存分配失败，则返回0
 static struct proc*
 allocproc(void)
 {
   struct proc *p;
 
+  // 遍历进程组，寻找处于UNUSED状态的进程
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
-    if(p->state == UNUSED) {
+
+    // 如果进程状态为UNUSED，则跳转至found
+    if(p->state == UNUSED) {//进程空闲
       goto found;
     } else {
+      // 否则释放锁，检查下一个进程是否为UNUSED状态
       release(&p->lock);
     }
   }
   return 0;
 
+// 以下是初始化一个进程的代码
 found:
+  //为当前进程分配PID，并将当前进程状态改为运行？
   p->pid = allocpid();
+  // p->state = ;
 
   // Allocate a trapframe page.
+  // 分配一个trapframe页，如果不成功则释放当前进程和锁
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     release(&p->lock);
     return 0;
   }
 
   // An empty user page table.
+  // 为当前进程申请一个页表页，并将trapframe和trampoline页面映射进去
+  // 注意trampoline代码作为内核代码的一部分，不用额外分配空间，只需要建立映射关系
+  // <我们后面将要修改这个函数，将加速页面一并映射进去>
   p->pagetable = proc_pagetable(p);
+
+  //如果上述函数执行不成功，则释放当前进程和锁
   if(p->pagetable == 0){
     freeproc(p);
     release(&p->lock);
@@ -116,12 +133,14 @@ found:
   }
 
   // Make a new kernel pagetable for the new process
+  //为新进程创建一个新的内核页
   p->kernelpgtbl = kvminit_newpgtbl();
   // printf("kernel_pagetable: %p\n", p->kernelpgtbl);
 
   // Allocate a page for the process's kernel stack.
   // Map it high in memory, followed by an invalid
   // guard page.
+  //分配一个页用以用户的内核栈
   char *pa = kalloc();
   if(pa == 0)
     panic("kalloc");
@@ -132,24 +151,39 @@ found:
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
+  // 译：设置新的上下文并从forkret开始执行
+  // 这会回到用户态下
+  // 这里涉及trap的返回过程，我们在后面研究源码时再深入解读这里的行为
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  //返回新的进程
   return p;
 }
 
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
+// 释放进程结构体和悬挂在其上的数据，包括页表
+// 必须要持有进程p的锁才可以调用此函数
 static void
 freeproc(struct proc *p)
-{
+{ 
+  // 释放trapframe页面，之所以要单独释放是因为：
+  // trapframe页面位于地址空间的最高处，与下面已经使用的地址空间是分离的
   if(p->trapframe)
     kfree((void*)p->trapframe);
+  // 释放完将trapframe指针置为空
   p->trapframe = 0;
+
+  // 释放页表
+  // proc_freepagetable会调用uvmunmap解除trampoline和trapframe的映射关系
+  // 并最终调用uvmfree释放内存和页表
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+
+  // 将页表与其他量全部置为空，表示进程已完全释放
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -179,12 +213,16 @@ freeproc(struct proc *p)
 
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
+// 译： 为给定的进程创建一个页表
+// 没有用户地址空间，只有trampoline页面
 pagetable_t
 proc_pagetable(struct proc *p)
 {
   pagetable_t pagetable;
 
   // An empty page table.
+  // 调用uvmcreate函数返回一个空页表
+  // uvmcreate函数的详细解释见完全解析系列博客(2)
   pagetable = uvmcreate();
   if(pagetable == 0)
     return 0;
@@ -193,13 +231,22 @@ proc_pagetable(struct proc *p)
   // at the highest user virtual address.
   // only the supervisor uses it, on the way
   // to/from user space, so not PTE_U.
+  // 译：将trampoline页面(用于系统调用返回)映射到用户最高虚拟地址处
+  // 只有超级用户(处于超级用户模式)下才可以使用
+  // 所以PTE_U标志为0
+  // 如果出错，就调用uvmfree来释放映射关系，回收页表
+  // 注意这里传入的sz是0，表明在这一步没有实际的物理内存需要释放
   if(mappages(pagetable, TRAMPOLINE, PGSIZE,
               (uint64)trampoline, PTE_R | PTE_X) < 0){
     uvmfree(pagetable, 0);
     return 0;
   }
 
+
   // map the trapframe just below TRAMPOLINE, for trampoline.S.
+  // uvmunmap函数的讲解见系列博客(2)
+  // 将trapframe映射到紧邻TRAMPOLINE的下一个页面
+  // 如果出错，首先取消TRAMPOLINE的映射关系，再使用uvmfree释放页表映射关系，回收页表
   if(mappages(pagetable, TRAPFRAME, PGSIZE,
               (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
@@ -212,6 +259,7 @@ proc_pagetable(struct proc *p)
 
 // Free a process's page table, and free the
 // physical memory it refers to.
+//取消映射关系和回收页表页
 void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {

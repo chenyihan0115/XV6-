@@ -81,27 +81,31 @@ struct trapframe {
 };
 
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+//空闲，睡眠，就绪，运行，终止
+
 
 // Per-process state
 struct proc {
-  struct spinlock lock;
+  struct spinlock lock;        //自旋锁，用于在多线程环境下保护进程结构体中的共享数据。
 
   // p->lock must be held when using these:
-  enum procstate state;        // Process state
-  struct proc *parent;         // Parent process
-  void *chan;                  // If non-zero, sleeping on chan
-  int killed;                  // If non-zero, have been killed
-  int xstate;                  // Exit status to be returned to parent's wait
+  enum procstate state;        // 进程状态，可能的取值包括运行、就绪、睡眠、停止等。
+  struct proc *parent;         // 指向父进程的指针
+  void *chan;                  // If non-zero, sleeping on chan 用于睡眠和唤醒的通道。
+  int killed;                  // 表示进程是否已被杀死的标志。
+  int xstate;                  // 用于存储进程的退出状态，将返回给父进程的wait系统调用。
   int pid;                     // Process ID
 
   // these are private to the process, so p->lock need not be held.
-  uint64 kstack;               // Virtual address of kernel stack
-  uint64 sz;                   // Size of process memory (bytes)
-  pagetable_t pagetable;       // User page table
-  struct trapframe *trapframe; // data page for trampoline.S
-  struct context context;      // swtch() here to run process
-  struct file *ofile[NOFILE];  // Open files
-  struct inode *cwd;           // Current directory
-  char name[16];               // Process name (debugging)
-  pagetable_t kernelpgtbl;      // Kernel page table
+  //进程的私有成员，不需要持有进程锁来访问，不用担心并发访问的问题
+  uint64 kstack;               // 内核栈的虚拟地址。
+  uint64 sz;                   // 进程内存空间的大小（以字节为单位）
+  pagetable_t pagetable;       // 用户空间页表
+  struct trapframe *trapframe; // 用于存储进程的中断帧，是一个数据页，用于中断处理。
+  // struct usyscall  *usyscall;
+  struct context context;      // 用于进程上下文切换的数据结构。
+  struct file *ofile[NOFILE];  // 打开文件表，存储进程打开的文件描述符。
+  struct inode *cwd;           // 当前工作目录的inode指针。
+  char name[16];               // 进程名，用于调试目的
+  pagetable_t kernelpgtbl;     // 内核页表，用于映射内核空间
 };
